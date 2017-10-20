@@ -7,7 +7,8 @@ Utilizes descriptors to store connections.
 Accepts incoming connections through select.
 Recvs incoming messages through select.
 
-Features:
+Features:    
+
 -Is non-blocking    
 
 -Utilizes Cereal for serialization of structure for messages. (http://uscilab.github.io/cereal/)
