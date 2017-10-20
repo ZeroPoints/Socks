@@ -13,7 +13,7 @@ Features:
 
 
 Client Code:
-TODO:
+Done. Connects to inputted server(no checking) on port 5001(magic number)
 
 
 
