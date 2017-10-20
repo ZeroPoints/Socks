@@ -8,7 +8,8 @@ Accepts incoming connections through select.
 Recvs incoming messages through select.
 
 Features:
--Is non-blocking
+-Is non-blocking    
+
 -Utilizes Cereal for serialization of structure for messages. (http://uscilab.github.io/cereal/)
 
 
