@@ -55,10 +55,34 @@ void ServerMainThread()
 	std::thread serverConnectionThread;
 	serverConnectionThread = std::thread(&ConnectionManager::StartServerListener, connectionManager);
 
+
 	while (true)
 	{
-		printf("Main Thread Sleeping\n");
-		Sleep(5000);
+		int test = 0;
+		std::cout << "\nType 1 or 2 and push enter: ";
+		std::cin >> test;
+		Payload pl;
+		switch (test)
+		{
+		case 1:
+			pl.data = "Thanks for the aids mate";
+			pl.type = Payload::PayloadType::Extra;
+			connectionManager->PayloadToSendAll(pl);
+			break;
+		case 2:
+			pl.data = "Thanks blah face";
+			pl.type = Payload::PayloadType::Status;
+			connectionManager->PayloadToSendAll(pl);
+			break;
+		case 3:
+			//Send Data To All
+			pl.data = "1ABCDEFGHIJKLMNOPQRSTUVWXYZ2ABCDEFGHIJKLMNOPQRSTUVWXYZ3ABCDEFGHIJKLMNOPQRSTUVWXYZ4ABCDEFGHIJKLMNOPQRSTUVWXYZ5ABCDEFGHIJKLMNOPQRSTUVWXYZ6ABCDEFGHIJKLMNOPQRSTUVWXYZ7ABCDEFGHIJKLMNOPQRSTUVWXYZ8ABCDEFGHIJKLMNOPQRSTUVWXYZ9ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+			pl.type = Payload::PayloadType::Info;
+			connectionManager->PayloadToSendAll(pl);
+			break;
+		default:
+			break;
+		}
 	}
 }
 
@@ -72,31 +96,30 @@ void ClientMainThread(char *ipaddress)
 
 	clientConnectionThread = std::thread(&ConnectionManager::StartClientConnection, connectionManager, ipaddress, 5001);
 
-	//threadTest = std::thread(ThreadConnectionSender, std::ref(connectionManager));
-
 	while (true)
 	{
 		int test = 0;
-		std::cout << "\nType 1 or 2 and push enter: ";
+		std::cout << "\nType 1 or 2 and push enter: \n";
 		std::cin >> test;
+
 		Payload pl;
 		switch (test)
 		{
 		case 1:
 			pl.data = "Thanks for the aids mate";
 			pl.type = Payload::PayloadType::Extra;
-			connectionManager->PayloadToSend(pl);
+			connectionManager->PayloadToSendAll(pl);
 			break;
 		case 2:
 			pl.data = "Thanks blah face";
 			pl.type = Payload::PayloadType::Status;
-			connectionManager->PayloadToSend(pl);
+			connectionManager->PayloadToSendAll(pl);
 			break;
 		case 3:
 			//Send Data To All
 			pl.data = "1ABCDEFGHIJKLMNOPQRSTUVWXYZ2ABCDEFGHIJKLMNOPQRSTUVWXYZ3ABCDEFGHIJKLMNOPQRSTUVWXYZ4ABCDEFGHIJKLMNOPQRSTUVWXYZ5ABCDEFGHIJKLMNOPQRSTUVWXYZ6ABCDEFGHIJKLMNOPQRSTUVWXYZ7ABCDEFGHIJKLMNOPQRSTUVWXYZ8ABCDEFGHIJKLMNOPQRSTUVWXYZ9ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 			pl.type = Payload::PayloadType::Info;
-			connectionManager->PayloadToSend(pl);
+			connectionManager->PayloadToSendAll(pl);
 			break;
 		default:
 			break;

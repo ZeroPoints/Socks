@@ -1,6 +1,8 @@
 #pragma once
 
 #include <winsock.h>
+#include <deque>
+#include "Payload.h"
 
 
 
@@ -27,4 +29,5 @@ struct Connection
 
 
 	  
+	std::deque<Payload> DataToTransmit;
 };

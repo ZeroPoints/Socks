@@ -33,18 +33,32 @@ public:
 
 	void StartServerListener();
 
-	int CleanConnectionAndDesriptor(int fd, int maxFileDescriptors, fd_set &masterfds);
+	int CleanConnectionAndDesriptor(int fd);
 
 	void StartClientConnection(char *ipAddress, int port);
 	void PayloadToSend(Payload data);
+	void PayloadToSendAll(Payload data);
+
+	int AcceptConnection();
+	void SendData(int currentSocketDescriptor);
+	int ReceiveExpectedSize(int currentSocketDescriptor);
+	int ReceiveExpectedData(int currentSocketDescriptor);
+
+	void SetMasterDescriptor();
+	Connection CreateNewConnection(char *ipAddress, int port);
+
 
 private:
 
-	sockaddr_in sockAddr_;
-	SOCKET currentSocket_;
+	SOCKADDR_IN sockAddr_;
+	SOCKET mainSocket_;
 
-	std::deque<Payload> dataToTransmit_;
+	//std::deque<Payload> dataToTransmit_;
 	std::map<int, Connection> connectionList_;
+
+
+	int maxFileDescriptors_;
+	fd_set masterfds_, readfds_, writefds_;
 
 };
 

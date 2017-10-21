@@ -50,11 +50,13 @@ void ConnectionManager::StartServerListener()
 	int flagOn = 1;
 	u_long nonBlocking = 1;
 	int result = -1;
+	//struct timeval timeout;
+	//timeout.tv_sec = 5;                         
+	//timeout.tv_usec = 10000;
 
-	//maybe dont use tcp use udp?
-
-	auto currentSocketDescriptor = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
-	if (currentSocketDescriptor == INVALID_SOCKET)
+	//maybe dont use tcp?
+	mainSocket_ = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
+	if (mainSocket_ == INVALID_SOCKET)
 	{
 		printf("Socket Init Failed.\n");
 		return;
@@ -66,7 +68,7 @@ void ConnectionManager::StartServerListener()
 	sockAddr_.sin_addr.s_addr = htonl(INADDR_ANY);
 
 	//reuse socket descriptor
-	result = setsockopt(currentSocketDescriptor, SOL_SOCKET, SO_REUSEADDR, (char *)&flagOn, sizeof(flagOn));
+	result = setsockopt(mainSocket_, SOL_SOCKET, SO_REUSEADDR, (char *)&flagOn, sizeof(flagOn));
 	if (result < 0)
 	{
 		printf("Socket setsockopt Failed.\n");
@@ -74,7 +76,7 @@ void ConnectionManager::StartServerListener()
 	}
 
 	//Non Blocking code
-	result = ioctlsocket(currentSocketDescriptor, FIONBIO, &nonBlocking);
+	result = ioctlsocket(mainSocket_, FIONBIO, &nonBlocking);
 	if (result < 0)
 	{
 		printf("Socket ioctl Failed.\n");
@@ -82,7 +84,7 @@ void ConnectionManager::StartServerListener()
 	}
 
 	//generic bind statement
-	result = bind(currentSocketDescriptor, (SOCKADDR *)(&sockAddr_), sizeof(sockAddr_));
+	result = bind(mainSocket_, (SOCKADDR *)(&sockAddr_), sizeof(sockAddr_));
 	if (result == SOCKET_ERROR)
 	{
 		printf("Socket bind Failed.\n");
@@ -90,70 +92,50 @@ void ConnectionManager::StartServerListener()
 	}
 
 	//does the value show how many concurrent descriptors i can run?
-	result = listen(currentSocketDescriptor, 16);
+	result = listen(mainSocket_, 16);
 	if (result == SOCKET_ERROR)
 	{
 		printf("Socket listen Failed.\n");
 		return;
 	}
 
-	fd_set masterfds, currentfds;
-	FD_ZERO(&masterfds);
-	FD_SET(currentSocketDescriptor, &masterfds);
-	int sin_size = sizeof(sockaddr_in);
-	int maxFileDescriptors = currentSocketDescriptor;
-	char errBuff[100];
-	int newClientSocket = 0;
+	SetMasterDescriptor();
+
 	while (true)
 	{
 		try
 		{
-			memcpy(&currentfds, &masterfds, sizeof(masterfds));
-			result = select(maxFileDescriptors + 1, &currentfds, NULL, NULL, NULL);
+			memcpy(&readfds_, &masterfds_, sizeof(masterfds_));
+			memcpy(&writefds_, &masterfds_, sizeof(masterfds_));
+			/*FD_ZERO(&writefds_);
+			for (auto it = connectionList_.begin(); it != connectionList_.end(); it++)
+			{
+				if (it->second.DataToTransmit.size() > 0)
+				{
+					FD_SET(it->first, &writefds_);
+				}
+			}*/
+			result = select(maxFileDescriptors_ + 1, &readfds_, &writefds_, NULL, NULL);
 			if (result < 0)
 			{
+				char errBuff[100];
 				strerror_s(errBuff, errno);
 				printf("Socket select Failed: %d - %s.\n", result, errBuff);
 				//return;
 			}
-			for (int fd = 0; fd <= maxFileDescriptors; fd++)
+
+			//Loop for each socket in servers list and send them this message
+			for (int fd = 0; fd <= maxFileDescriptors_; fd++)
 			{
-				if (FD_ISSET(fd, &currentfds))
+				if (FD_ISSET(fd, &readfds_))
 				{
-					if (fd == currentSocketDescriptor)
+					if (fd == mainSocket_)
 					{
-						newClientSocket = 0;
-						//Keep grabbing any new conns if avail then go back to select
-						while (newClientSocket != -1)
+						auto newClientSocket = AcceptConnection();
+						FD_SET(newClientSocket, &masterfds_);
+						if (newClientSocket > maxFileDescriptors_)
 						{
-							Connection newClient;
-							int nlen = sizeof(SOCKADDR_IN);
-							memset(&newClient.SockInfo, 0, sizeof(newClient.SockInfo));
-							newClientSocket = accept(currentSocketDescriptor, (SOCKADDR *)&newClient.SockInfo, &nlen);
-							if (newClientSocket <= 0)
-							{
-								strerror_s(errBuff, errno);
-								printf("Socket accept Failed: %d - %s.\n", newClientSocket, errBuff);
-								break;
-							}
-							newClient.FileDescriptor = newClientSocket;
-							newClient.Port = htons(newClient.SockInfo.sin_port);
-							newClient.IPAddress = inet_ntoa(newClient.SockInfo.sin_addr);
-							newClient.ReceivedBytes = 0;
-							newClient.ExpectedSize = 0;
-							if (connectionList_.count(newClientSocket))
-							{
-								//TODO: Free ipaddress, and whatever else may have been allocated memory.
-								printf("Reusing Socket File Descriptor...Should check for leaks in this struct\n");
-								printf("Old Connection: %d - %s - %d\n", newClientSocket, connectionList_[newClientSocket].IPAddress, connectionList_[newClientSocket].Port);
-							}
-							connectionList_[newClientSocket] = newClient;
-							printf("New Connection: %d - %s - %d\n", newClientSocket, newClient.IPAddress, newClient.Port);
-							FD_SET(newClientSocket, &masterfds);
-							if (newClientSocket > maxFileDescriptors)
-							{
-								maxFileDescriptors = newClientSocket;
-							}
+							maxFileDescriptors_ = newClientSocket;
 						}
 					}
 					else
@@ -161,62 +143,33 @@ void ConnectionManager::StartServerListener()
 						//For this connection if I already have the size then go get the data
 						if (connectionList_[fd].ExpectedSize == 0)
 						{
-							//read size of data expected
-							//TODO: Probably got to free this char
-							char expectedSizeResponse[16];
-							auto result = recv(fd, expectedSizeResponse, 16, 0);
-							if (result == 0)
+							result = ReceiveExpectedSize(fd);
+							if (result == -1)
 							{
-								//clean close conn
-								printf("%d - %s - Socket close recv 1.\n", fd, connectionList_[fd].IPAddress);
-								maxFileDescriptors = CleanConnectionAndDesriptor(fd, maxFileDescriptors, masterfds);
-
-								break;
+								CleanConnectionAndDesriptor(fd);
 							}
-							else if (result < 0)
-							{
-								strerror_s(errBuff, errno);
-								printf("%d - %s - Socket recv Failed 1: %d - %s.\n", fd, connectionList_[fd].IPAddress, result, errBuff);
-								maxFileDescriptors = CleanConnectionAndDesriptor(fd, maxFileDescriptors, masterfds);
-								break;
-							}
-							connectionList_[fd].ExpectedSize = atoi(expectedSizeResponse);
-							printf("%d - %s - Expected Bytes: %i\n", fd, connectionList_[fd].IPAddress, connectionList_[fd].ExpectedSize);
-							connectionList_[fd].ExpectedData = (char*)malloc(connectionList_[fd].ExpectedSize + 1);
 						}
-
-						//attempt to get payload if its ready otherwise reloop around
-						auto bytesIn = recv(fd,
-							connectionList_[fd].ExpectedData + connectionList_[fd].ReceivedBytes,
-							connectionList_[fd].ExpectedSize - connectionList_[fd].ReceivedBytes, 0);
-
-						//If its ready append the bytes and loop aaround again for more bytes if we didnt get the full message.
-						if (bytesIn >= 0)
+						else
 						{
-							printf("%d - %s - Byte Segment: %i\n", fd, connectionList_[fd].IPAddress, bytesIn);
-							connectionList_[fd].ReceivedBytes += bytesIn;
-
-							if (connectionList_[fd].ExpectedSize == connectionList_[fd].ReceivedBytes)
+							//Dont try do this straight away
+							//Can return -1 if ran to quickly.
+							result = ReceiveExpectedData(fd);
+							if (result == -1)
 							{
-								Payload d;
-								std::string s(connectionList_[fd].ExpectedData, connectionList_[fd].ExpectedSize);
-								std::stringstream is(s);
-								{
-									cereal::BinaryInputArchive iarchive(is);
-									iarchive(d);
-								}
-								printf("%d - %s - Data: \"%s\"\n", fd, connectionList_[fd].IPAddress, d.data.c_str());
-
-								//CLEAN UP connection buffer and size counts
-								connectionList_[fd].ExpectedSize = 0;
-								connectionList_[fd].ReceivedBytes = 0;
-								free(connectionList_[fd].ExpectedData);
+								int test = 0;
+								CleanConnectionAndDesriptor(fd);
 							}
 						}
-
-
 					}
+				}
 
+				//Will this keep firing hopefully?
+				if (FD_ISSET(fd, &writefds_))
+				{
+					if (connectionList_[fd].DataToTransmit.size() > 0)
+					{
+						SendData(fd);
+					}
 				}
 			}
 		}
@@ -232,18 +185,24 @@ void ConnectionManager::StartServerListener()
 
 
 
-int ConnectionManager::CleanConnectionAndDesriptor(int fd, int maxFileDescriptors, fd_set &masterfds)
+
+
+
+//Should maybe clean up the connectionList_
+//For now i wont just so i can see debug of who has connected in whole runtime.
+//Also if fd reuse will override the connection spot anyway
+int ConnectionManager::CleanConnectionAndDesriptor(int fd)
 {
 	closesocket(fd);
-	FD_CLR(fd, &masterfds);
-	if (fd == maxFileDescriptors)
+	FD_CLR(fd, &masterfds_);
+	if (fd == maxFileDescriptors_)
 	{
-		while (FD_ISSET(maxFileDescriptors, &masterfds) == FALSE)
+		while (FD_ISSET(maxFileDescriptors_, &masterfds_) == FALSE)
 		{
-			maxFileDescriptors--;
+			maxFileDescriptors_--;
 		}
 	}
-	return maxFileDescriptors;
+	return maxFileDescriptors_;
 }
 
 
@@ -261,20 +220,26 @@ int ConnectionManager::CleanConnectionAndDesriptor(int fd, int maxFileDescriptor
 
 void ConnectionManager::StartClientConnection(char *ipAddress, int port)
 {
-	auto currentSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-	if (currentSocket == INVALID_SOCKET)
+	u_long nonBlocking = 1;
+	int result = -1;
+	bool connected = false;
+	//struct timeval timeout;
+	//timeout.tv_sec = 5;
+	//timeout.tv_usec = 10000;
+
+	mainSocket_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (mainSocket_ == INVALID_SOCKET)
 	{
 		printf("Socket Init Failed.");
 	}
-	sockAddr_.sin_family = AF_INET;
-	sockAddr_.sin_port = htons(port);
-	sockAddr_.sin_addr.s_addr = inet_addr(ipAddress);
-	bool connected = false;
+
+	Connection newClient = CreateNewConnection(ipAddress, port);
+
 	while (!connected)
 	{
 		try
 		{
-			auto connectResult = connect(currentSocket, (SOCKADDR *)&sockAddr_, sizeof(sockAddr_));
+			auto connectResult = connect(mainSocket_, (SOCKADDR *)&newClient.SockInfo, sizeof(newClient.SockInfo));
 			if (connectResult == SOCKET_ERROR)
 			{
 				printf("Attempt to connect failed. - %ld \n", WSAGetLastError());
@@ -284,52 +249,75 @@ void ConnectionManager::StartClientConnection(char *ipAddress, int port)
 				continue;
 			}
 			connected = true;
-			printf("IP: %s\n", inet_ntoa(sockAddr_.sin_addr));
-			printf("Port: %d\n", htons(sockAddr_.sin_port));
+			connectionList_[mainSocket_] = newClient;
+			printf("New Connection: %d - %s - %d\n", mainSocket_, newClient.IPAddress, newClient.Port);
 
+			//Non Blocking code
+			result = ioctlsocket(mainSocket_, FIONBIO, &nonBlocking);
+			if (result < 0)
+			{
+				printf("Socket ioctl Failed.\n");
+				return;
+			}
+
+			SetMasterDescriptor();
+
+			//Keep sending/receiving data
 			while (true)
 			{
 				try
 				{
-					if (dataToTransmit_.size() > 0)
+					memcpy(&readfds_, &masterfds_, sizeof(masterfds_));
+					memcpy(&writefds_, &masterfds_, sizeof(masterfds_));
+					/*FD_ZERO(&writefds_);
+					for (auto it = connectionList_.begin(); it != connectionList_.end(); it++)
 					{
-						std::stringstream ss;
-						auto data = dataToTransmit_[0];
-						dataToTransmit_.pop_front();
+						if (it->second.DataToTransmit.size() > 0)
 						{
-							cereal::BinaryOutputArchive oarchive(ss);
-							oarchive(data);
+							FD_SET(it->first, &writefds_);
 						}
-						auto stringToSend = ss.str();
-						auto charToSend = stringToSend.c_str();
-						if (strcmp(charToSend, "") != 0)
+					}*/
+					result = select(maxFileDescriptors_ + 1, &readfds_, &writefds_, NULL, NULL);
+					if (result < 0)
+					{
+						char errBuff[100];
+						strerror_s(errBuff, errno);
+						printf("Socket select Failed: %d - %s.\n", result, errBuff);
+						//return;
+					}
+
+					//Loop for each socket in servers list and send them this message
+					for (int fd = 0; fd <= maxFileDescriptors_; fd++)
+					{
+						if (FD_ISSET(fd, &readfds_))
 						{
-							SOCKADDR_IN thisSenderInfo;
-							char payloadSize[16];
-							sprintf_s(payloadSize, sizeof(payloadSize), "%d", stringToSend.size());
-							printf("Client: %ld\n", currentSocket);
-							memset(&thisSenderInfo, 0, sizeof(thisSenderInfo));
-							int nlen = sizeof(thisSenderInfo);
-							getsockname(currentSocket, (SOCKADDR *)&thisSenderInfo, &nlen);
-							printf("IP: %s\n", inet_ntoa(thisSenderInfo.sin_addr));
-							printf("Port: %d\n", htons(thisSenderInfo.sin_port));
-							int bytesSent = send(currentSocket, payloadSize, sizeof(payloadSize), 0);
-							if (bytesSent == SOCKET_ERROR)
+							if (connectionList_[mainSocket_].ExpectedSize == 0)
 							{
-								printf("Error: %ld - %ld.\n", currentSocket, WSAGetLastError());
-								return;
-								//check iresult ? or hsocket? for status or try reopen/connect
-							}
-							bytesSent = send(currentSocket, charToSend, stringToSend.size(), 0);
-							if (bytesSent == SOCKET_ERROR)
-							{
-								printf("Error: %ld - %ld.\n", currentSocket, WSAGetLastError());
-								return;
+								result = ReceiveExpectedSize(mainSocket_);
+								if (result == -1)
+								{
+									CleanConnectionAndDesriptor(mainSocket_);
+								}
 							}
 							else
 							{
-								printf("Bytes: %ld\n", bytesSent);
-								printf("Data: \"%s\"\n", data.data.c_str());
+								//Dont try do this straight away
+								//Can return -1 if ran to quickly.
+								result = ReceiveExpectedData(mainSocket_);
+								if (result == -1)
+								{
+									int test = 0;
+									CleanConnectionAndDesriptor(mainSocket_);
+								}
+							}
+						}
+
+						//Will this keep firing hopefully?
+						if (FD_ISSET(fd, &writefds_))
+						{
+							if (connectionList_[mainSocket_].DataToTransmit.size() > 0)
+							{
+								SendData(mainSocket_);
 							}
 						}
 					}
@@ -352,11 +340,180 @@ void ConnectionManager::StartClientConnection(char *ipAddress, int port)
 
 
 
-void ConnectionManager::PayloadToSend(Payload data)
+
+
+
+void ConnectionManager::PayloadToSendAll(Payload data)
 {
-	dataToTransmit_.push_back(data);
+	for (auto it = connectionList_.begin(); it != connectionList_.end(); it++)
+	{
+		it->second.DataToTransmit.push_back(data);
+		//FD_SET(it->first, &writefds_);
+	}
 }
 
+
+
+
+
+
+
+Connection ConnectionManager::CreateNewConnection(char *ipAddress, int port )
+{
+	Connection newConnection;
+
+	newConnection.SockInfo.sin_family = AF_INET;
+	newConnection.SockInfo.sin_port = htons(port);
+	newConnection.SockInfo.sin_addr.s_addr = inet_addr(ipAddress);
+	newConnection.FileDescriptor = mainSocket_;
+	newConnection.Port = htons(newConnection.SockInfo.sin_port);
+	newConnection.IPAddress = inet_ntoa(newConnection.SockInfo.sin_addr);
+	newConnection.ReceivedBytes = 0;
+	newConnection.ExpectedSize = 0;
+
+	return newConnection;
+}
+
+
+void ConnectionManager::SetMasterDescriptor()
+{
+	FD_ZERO(&masterfds_);
+	FD_SET(mainSocket_, &masterfds_);
+	maxFileDescriptors_ = mainSocket_;
+}
+
+
+
+int ConnectionManager::AcceptConnection()
+{
+	int newClientSocket = 0;
+	//init connnection
+	Connection newClient = CreateNewConnection("",0);
+	int nlen = sizeof(SOCKADDR_IN);
+	memset(&newClient.SockInfo, 0, sizeof(newClient.SockInfo));
+	newClientSocket = accept(mainSocket_, (SOCKADDR *)&newClient.SockInfo, &nlen);
+	if (newClientSocket <= 0)
+	{
+		char errBuff[100];
+		strerror_s(errBuff, errno);
+		printf("Socket accept Failed: %d - %s.\n", newClientSocket, errBuff);
+	}
+	newClient.FileDescriptor = newClientSocket;
+	newClient.Port = htons(newClient.SockInfo.sin_port);
+	newClient.IPAddress = inet_ntoa(newClient.SockInfo.sin_addr);
+	if (connectionList_.count(newClientSocket))
+	{
+		//TODO: Free ipaddress, and whatever else may have been allocated memory.
+		printf("Reusing Socket File Descriptor...Should check for leaks in this struct\n");
+		printf("Old Connection: %d - %s - %d\n", newClientSocket, connectionList_[newClientSocket].IPAddress, connectionList_[newClientSocket].Port);
+	}
+	printf("New Connection: %d - %s - %d\n", newClientSocket, newClient.IPAddress, newClient.Port);
+	connectionList_[newClientSocket] = newClient;
+	
+	return newClientSocket;
+
+}
+
+
+int ConnectionManager::ReceiveExpectedSize(int currentSocketDescriptor)
+{
+	//Read size first
+	//Might need a select to watch descriptor? but how to send :O
+	char expectedSizeResponse[16];
+	auto result = recv(currentSocketDescriptor, expectedSizeResponse, 16, 0);
+	if (result == 0)
+	{
+		//clean close conn
+		printf("%d - %s - Socket close recv 1.\n", currentSocketDescriptor, connectionList_[currentSocketDescriptor].IPAddress);
+	}
+	else if (result < 0)
+	{
+		char errBuff[100];
+		strerror_s(errBuff, errno);
+		printf("%d - %s - Socket recv Failed 1: %d - %s.\n", currentSocketDescriptor, connectionList_[currentSocketDescriptor].IPAddress, result, errBuff);
+	}
+	else
+	{
+		connectionList_[currentSocketDescriptor].ExpectedSize = atoi(expectedSizeResponse);
+		printf("%d - %s - Expected Bytes: %i\n", currentSocketDescriptor, connectionList_[currentSocketDescriptor].IPAddress, connectionList_[currentSocketDescriptor].ExpectedSize);
+		connectionList_[currentSocketDescriptor].ExpectedData = (char*)malloc(connectionList_[currentSocketDescriptor].ExpectedSize + 1);
+	}
+	return result;
+}
+
+
+int ConnectionManager::ReceiveExpectedData(int currentSocketDescriptor)
+{
+	//if size return. get actual data
+	//attempt to get payload if its ready otherwise reloop around
+	auto bytesIn = recv(currentSocketDescriptor,
+		connectionList_[currentSocketDescriptor].ExpectedData + connectionList_[currentSocketDescriptor].ReceivedBytes,
+		connectionList_[currentSocketDescriptor].ExpectedSize - connectionList_[currentSocketDescriptor].ReceivedBytes, 0);
+
+	//If its ready append the bytes and loop aaround again for more bytes if we didnt get the full message.
+	if (bytesIn >= 0)
+	{
+		printf("%d - %s - Byte Segment: %i\n", currentSocketDescriptor, connectionList_[currentSocketDescriptor].IPAddress, bytesIn);
+		connectionList_[currentSocketDescriptor].ReceivedBytes += bytesIn;
+
+		if (connectionList_[currentSocketDescriptor].ExpectedSize == connectionList_[currentSocketDescriptor].ReceivedBytes)
+		{
+			Payload d;
+			std::string s(connectionList_[currentSocketDescriptor].ExpectedData, connectionList_[currentSocketDescriptor].ExpectedSize);
+			std::stringstream is(s);
+			{
+				cereal::BinaryInputArchive iarchive(is);
+				iarchive(d);
+			}
+			printf("%d - %s - Data: \"%s\"\n", currentSocketDescriptor, connectionList_[currentSocketDescriptor].IPAddress, d.data.c_str());
+
+			//CLEAN UP connection buffer and size counts
+			connectionList_[currentSocketDescriptor].ExpectedSize = 0;
+			connectionList_[currentSocketDescriptor].ReceivedBytes = 0;
+			free(connectionList_[currentSocketDescriptor].ExpectedData);
+		}
+	}
+	return bytesIn;
+}
+
+
+
+
+void ConnectionManager::SendData(int currentSocketDescriptor)
+{
+	std::stringstream ss;
+	auto data = connectionList_[currentSocketDescriptor].DataToTransmit[0];
+	connectionList_[currentSocketDescriptor].DataToTransmit.pop_front();
+	{
+		cereal::BinaryOutputArchive oarchive(ss);
+		oarchive(data);
+	}
+	auto stringToSend = ss.str();
+	auto charToSend = stringToSend.c_str();
+	if (strcmp(charToSend, "") != 0)
+	{
+		char payloadSize[16];
+		sprintf_s(payloadSize, sizeof(payloadSize), "%d", stringToSend.size());
+		int bytesSent = send(currentSocketDescriptor, payloadSize, sizeof(payloadSize), 0);
+		if (bytesSent == SOCKET_ERROR)
+		{
+			printf("Error: %ld - %ld.\n", currentSocketDescriptor, WSAGetLastError());
+			return;
+			//check iresult ? or hsocket? for status or try reopen/connect
+		}
+		bytesSent = send(currentSocketDescriptor, charToSend, stringToSend.size(), 0);
+		if (bytesSent == SOCKET_ERROR)
+		{
+			printf("Error: %ld - %ld.\n", currentSocketDescriptor, WSAGetLastError());
+			return;
+		}
+		else
+		{
+			printf("Bytes: %ld\n", bytesSent);
+			printf("Data: \"%s\"\n", data.data.c_str());
+		}
+	}
+}
 
 
 
