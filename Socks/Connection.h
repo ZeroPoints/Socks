@@ -2,6 +2,8 @@
 
 #include <winsock.h>
 #include <deque>
+#include <string>
+
 #include "Payload.h"
 
 

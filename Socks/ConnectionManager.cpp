@@ -2,9 +2,9 @@
 #include "ConnectionManager.h"
 
 
-
-
-
+/*
+Inits stuff for this object
+*/
 ConnectionManager::ConnectionManager()
 {
 	WSADATA wsaData;
@@ -29,14 +29,18 @@ ConnectionManager::ConnectionManager()
 }
 
 
+
+/*
+Cleans up socket stuff...
+*/
 ConnectionManager::~ConnectionManager()
 {
 	//close all connections
+
 	//Cleanup winsock
 	if (WSACleanup() != 0)
 	{
 		printf("WSA Clean Failed.");
-		// cleanup failed
 	}
 }
 
@@ -44,21 +48,27 @@ ConnectionManager::~ConnectionManager()
 
 
 
+
+/*
+Starts a server listener infinite loop
+*/
 void ConnectionManager::StartServerListener()
 {
 
 	int flagOn = 1;
 	u_long nonBlocking = 1;
 	int result = -1;
+	//Testing stuff.
 	//struct timeval timeout;
 	//timeout.tv_sec = 5;                         
 	//timeout.tv_usec = 10000;
 
-	//maybe dont use tcp?
+	//maybe dont use tcp, include as a setting maybe?
 	mainSocket_ = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
+
 	if (mainSocket_ == INVALID_SOCKET)
 	{
-		printf("Socket Init Failed.\n");
+		std::cout << "Socket Init Failed: " << WSAGetLastError();
 		return;
 	}
 
@@ -107,14 +117,21 @@ void ConnectionManager::StartServerListener()
 		{
 			memcpy(&readfds_, &masterfds_, sizeof(masterfds_));
 			memcpy(&writefds_, &masterfds_, sizeof(masterfds_));
-			/*FD_ZERO(&writefds_);
-			for (auto it = connectionList_.begin(); it != connectionList_.end(); it++)
+
+			//Cant remember why i commented out this stuff
+			//FD_ZERO(&writefds_);
+			//FD_SET(mainSocket_, &writefds_);
+			/*for (auto it = connectionList_.begin(); it != connectionList_.end(); it++)
 			{
 				if (it->second.DataToTransmit.size() > 0)
-				{
+				{ 
 					FD_SET(it->first, &writefds_);
 				}
 			}*/
+			//result = select(maxFileDescriptors_ + 1, &readfds_, &writefds_, NULL, &timeout);
+			//result = select(maxFileDescriptors_ + 1, &readfds_, NULL, NULL, NULL);
+
+
 			result = select(maxFileDescriptors_ + 1, &readfds_, &writefds_, NULL, NULL);
 			if (result < 0)
 			{
@@ -137,6 +154,7 @@ void ConnectionManager::StartServerListener()
 						{
 							maxFileDescriptors_ = newClientSocket;
 						}
+						continue;
 					}
 					else
 					{
@@ -151,8 +169,7 @@ void ConnectionManager::StartServerListener()
 						}
 						else
 						{
-							//Dont try do this straight away
-							//Can return -1 if ran to quickly.
+							//Dont try do this straight away. Can return -1 if ran to quickly.
 							result = ReceiveExpectedData(fd);
 							if (result == -1)
 							{
@@ -188,9 +205,11 @@ void ConnectionManager::StartServerListener()
 
 
 
-//Should maybe clean up the connectionList_
-//For now i wont just so i can see debug of who has connected in whole runtime.
-//Also if fd reuse will override the connection spot anyway
+
+/*
+Should maybe clean up the connectionList_
+For now i wont just so i can see debug of who has connected in whole runtime.(which should maybe be logged instead)
+*/
 int ConnectionManager::CleanConnectionAndDesriptor(int fd)
 {
 	closesocket(fd);
@@ -217,7 +236,9 @@ int ConnectionManager::CleanConnectionAndDesriptor(int fd)
 
 
 
-
+/*
+Starts a client connection
+*/
 void ConnectionManager::StartClientConnection(char *ipAddress, int port)
 {
 	u_long nonBlocking = 1;
@@ -230,7 +251,8 @@ void ConnectionManager::StartClientConnection(char *ipAddress, int port)
 	mainSocket_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (mainSocket_ == INVALID_SOCKET)
 	{
-		printf("Socket Init Failed.");
+		std::cout << "Socket Init Failed";
+
 	}
 
 	Connection newClient = CreateNewConnection(ipAddress, port);
@@ -269,14 +291,17 @@ void ConnectionManager::StartClientConnection(char *ipAddress, int port)
 				{
 					memcpy(&readfds_, &masterfds_, sizeof(masterfds_));
 					memcpy(&writefds_, &masterfds_, sizeof(masterfds_));
-					/*FD_ZERO(&writefds_);
-					for (auto it = connectionList_.begin(); it != connectionList_.end(); it++)
+					//Cant remember why i commented this out. 
+					//FD_ZERO(&writefds_);
+					//FD_SET(mainSocket_, &writefds_);
+					/*for (auto it = connectionList_.begin(); it != connectionList_.end(); it++)
 					{
 						if (it->second.DataToTransmit.size() > 0)
 						{
 							FD_SET(it->first, &writefds_);
 						}
 					}*/
+					//result = select(maxFileDescriptors_ + 1, &readfds_, &writefds_, NULL, &timeout);
 					result = select(maxFileDescriptors_ + 1, &readfds_, &writefds_, NULL, NULL);
 					if (result < 0)
 					{
@@ -301,8 +326,7 @@ void ConnectionManager::StartClientConnection(char *ipAddress, int port)
 							}
 							else
 							{
-								//Dont try do this straight away
-								//Can return -1 if ran to quickly.
+								//Dont try do this straight away. Can return -1 if ran to quickly.
 								result = ReceiveExpectedData(mainSocket_);
 								if (result == -1)
 								{
@@ -340,9 +364,19 @@ void ConnectionManager::StartClientConnection(char *ipAddress, int port)
 
 
 
+void ConnectionManager::PayloadToSend(Payload data)
+{
+	for (auto it = connectionList_.begin(); it != connectionList_.end(); it++)
+	{
+		
+		it->second.DataToTransmit.push_back(data);
+		//FD_SET(it->first, &writefds_);
+	}
+}
 
-
-
+/*
+Sends the payload to all connections in the connectionlist
+*/
 void ConnectionManager::PayloadToSendAll(Payload data)
 {
 	for (auto it = connectionList_.begin(); it != connectionList_.end(); it++)
@@ -357,7 +391,9 @@ void ConnectionManager::PayloadToSendAll(Payload data)
 
 
 
-
+/*
+Creates a new socket connection 
+*/
 Connection ConnectionManager::CreateNewConnection(char *ipAddress, int port )
 {
 	Connection newConnection;
@@ -375,6 +411,10 @@ Connection ConnectionManager::CreateNewConnection(char *ipAddress, int port )
 }
 
 
+
+/*
+Sets master stuff
+*/
 void ConnectionManager::SetMasterDescriptor()
 {
 	FD_ZERO(&masterfds_);
@@ -384,6 +424,10 @@ void ConnectionManager::SetMasterDescriptor()
 
 
 
+
+/*
+Accepts a connection and adds it to the connectionlist
+*/
 int ConnectionManager::AcceptConnection()
 {
 	int newClientSocket = 0;
@@ -415,10 +459,13 @@ int ConnectionManager::AcceptConnection()
 }
 
 
+
+
+/*
+Gets the expected size of data about to be received
+*/
 int ConnectionManager::ReceiveExpectedSize(int currentSocketDescriptor)
 {
-	//Read size first
-	//Might need a select to watch descriptor? but how to send :O
 	char expectedSizeResponse[16];
 	auto result = recv(currentSocketDescriptor, expectedSizeResponse, 16, 0);
 	if (result == 0)
@@ -442,10 +489,16 @@ int ConnectionManager::ReceiveExpectedSize(int currentSocketDescriptor)
 }
 
 
+
+/*
+Receives the data from the socket
+*/
 int ConnectionManager::ReceiveExpectedData(int currentSocketDescriptor)
 {
-	//if size return. get actual data
-	//attempt to get payload if its ready otherwise reloop around
+	/*
+	If we get the correct size then read all data
+	attempt to get payload if its ready otherwise reloop around
+	*/
 	auto bytesIn = recv(currentSocketDescriptor,
 		connectionList_[currentSocketDescriptor].ExpectedData + connectionList_[currentSocketDescriptor].ReceivedBytes,
 		connectionList_[currentSocketDescriptor].ExpectedSize - connectionList_[currentSocketDescriptor].ReceivedBytes, 0);
@@ -478,7 +531,9 @@ int ConnectionManager::ReceiveExpectedData(int currentSocketDescriptor)
 
 
 
-
+/*
+Sends any data in the DataToTransmit buffer
+*/
 void ConnectionManager::SendData(int currentSocketDescriptor)
 {
 	std::stringstream ss;
